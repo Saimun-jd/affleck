@@ -1,8 +1,11 @@
-# Affleck
+# Affleck - Gotham needs its hero for that first I need to complete my due learning
 
-![Affleck bat mark](public/affleck-logo.svg)
+<img src="./public/affleck-logo.svg" alt="Affleck bat mark" width="100" />
+<h2>Built for <code>polymaths</code> with learning management issues.</h2>
 
-Affleck is a mobile-first learning journal for keeping several learning threads in motion without turning them into a dashboard. It supports YouTube playlists plus local PDFs, research papers, and one-by-one blog links, and is built for Tauri 2 + React + SQLite. The restrained bat mark represents returning to a learning thread with focus and consistency.
+Affleck is a mobile-first learning journal for keeping several learning threads in motion without turning them into a dashboard. It supports YouTube playlists plus local PDFs, research papers, and one-by-one blog links, and is built for Tauri 2 + React + SQLite.
+
+<h3>Full android support without any hassle of authentication.</h3>
 
 The product decisions for this first slice are recorded in [`docs/v1-decisions.md`](docs/v1-decisions.md).
 
