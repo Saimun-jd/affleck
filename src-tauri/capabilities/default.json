@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://inv.nadeko.net/**" },
+        { "url": "https://invidious.nerdvpn.de/**" },
+        { "url": "https://yt.chocolatemoo53.com/**" },
+        { "url": "https://invidious.tiekoetter.com/**" },
+        { "url": "https://invidious.f5.si/**" }
+      ]
+    },
+    "sql:default",
+    "sql:allow-execute",
+    "notification:default"
+  ]
+}
