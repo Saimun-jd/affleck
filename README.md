@@ -9,6 +9,8 @@ Affleck is a mobile-first learning journal for keeping several learning threads 
 
 The product decisions for this first slice are recorded in [`docs/v1-decisions.md`](docs/v1-decisions.md).
 
+Interested in contributing? Start with the project guidelines in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Run the web preview
 
 ```bash
@@ -67,7 +69,9 @@ The local release outputs are unsigned by design until a production keystore is 
 
 ## Current MVP
 
-- Today: next video, overall completion, review queue, and reminder summary.
+- Today: next video, overall completion, review queue, reminder summary, and one first-unfinished daily goal when a checklist exists.
+- Daily tasks: opt into a fresh checklist each day, add as many tasks or goals as needed, mark them complete at any time, and keep previous days out of Today while retaining their completion history.
+- Tasks: manage today’s checklist from the bottom navigation and view completed-task totals, current/best streaks, and daily history. Android schedules the remaining six-hour check-in points for the current day, cancelling them when the checklist is complete.
 - Library: groups are containers, not filters. Grouped resources appear only inside their group; the root shows groups and ungrouped resources. Searching a grouped resource reveals its group rather than a duplicate resource row.
 - Organization: press and hold a resource (or use **Move to group**) to search existing groups or create one and move the resource in a single step. Names differing only in capitalization, Unicode compatibility forms, or extra spaces reuse the existing group. Similar names are suggestions, not automatic merges. Playlists can be grouped too.
 - Add resources: import a playlist, attach a PDF without copying it into the app, or add research papers/blogs. Groups are created from the item you are organizing, not from a separate add tab.

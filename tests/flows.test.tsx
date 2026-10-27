@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import App from "../src/App";
 import { fixture, imported } from "./fixtures";
-import { loadSnapshot } from "../src/lib/db";
+import { getLocalDateKey, loadSnapshot } from "../src/lib/db";
+import type { DailyTask } from "../src/types";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => false, invoke: vi.fn() }));
 vi.mock("../src/lib/youtube", () => ({ importYoutubePlaylist: vi.fn(async () => imported) }));
@@ -130,4 +131,73 @@ it("returns to Today on Android back from another section and allows exit from T
   expect(back?.()).toBe(false);
   await waitFor(() => expect(screen.getByRole("heading", { name: "Keep the thread alive." })).toBeTruthy());
   expect((window as Window & { onAndroidBackPressed?: () => boolean }).onAndroidBackPressed?.()).toBe(true);
+});
+
+it("starts a daily checklist, completes tasks, and shows only the next task on Today", async () => {
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Plan my day" }));
+  expect(await screen.findByRole("heading", { name: "Tasks" })).toBeTruthy();
+  const input = screen.getByLabelText("Add a task or goal");
+  fireEvent.change(input, { target: { value: "Read ten pages" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+  await screen.findByRole("button", { name: "Add task" });
+  fireEvent.change(input, { target: { value: "Write a short summary" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+  await screen.findByText("Task added to today’s checklist.");
+  fireEvent.click(screen.getByRole("checkbox", { name: "Read ten pages" }));
+  await waitFor(() => expect((screen.getByRole("checkbox", { name: "Read ten pages" }) as HTMLInputElement).checked).toBe(true));
+  fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+  expect(await screen.findByRole("heading", { name: "Write a short summary" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Read ten pages" })).toBeNull();
+  const saved = await loadSnapshot();
+  expect(saved.dailyTasks?.filter((task) => task.date === getLocalDateKey())).toHaveLength(2);
+  expect(saved.dailyTasks?.find((task) => task.title === "Read ten pages")?.completed).toBe(true);
+});
+
+it("keeps previous-day task titles out of today while retaining daily history", async () => {
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = getLocalDateKey(yesterdayDate);
+  const today = getLocalDateKey();
+  const oldTask: DailyTask = { id: "old-task", date: yesterday, title: "Yesterday’s task", completed: true, createdAt: `${yesterday}T08:00:00.000Z` };
+  const saved = fixture();
+  saved.dailyTasks = [oldTask];
+  saved.dailyTaskDays = [
+    { date: yesterday, optedIn: true, createdAt: oldTask.createdAt },
+    { date: today, optedIn: true, createdAt: `${today}T08:00:00.000Z` },
+  ];
+  localStorage.setItem("affleck.local.v1", JSON.stringify(saved));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /Tasks/ }));
+  expect(screen.getByText("Daily history")).toBeTruthy();
+  expect(screen.getByText("1/1 tasks complete")).toBeTruthy();
+  expect(screen.queryByText("Yesterday’s task")).toBeNull();
+});
+
+it("shows a pending PDF in Today’s Next up card when no playlist exists", async () => {
+  const saved = fixture();
+  saved.playlists = [];
+  saved.videos = [];
+  saved.resources = [{
+    id: "pdf-1",
+    kind: "pdf",
+    title: "Designing calm systems",
+    sourceUrl: "",
+    fileName: "designing-calm-systems.pdf",
+    fileUrl: "content://documents/designing-calm-systems.pdf",
+    author: "A. Reader",
+    description: "",
+    groupId: null,
+    status: "pending",
+    progress: 0,
+    currentPage: 0,
+    totalPages: 20,
+    literatureReview: "",
+    createdAt: "2026-10-27T08:00:00.000Z",
+  }];
+  localStorage.setItem("affleck.local.v1", JSON.stringify(saved));
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Designing calm systems" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Open resource/ })).toBeTruthy();
+  expect(screen.queryByText("Your shelf is clear.")).toBeNull();
 });

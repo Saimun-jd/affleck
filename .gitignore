@@ -12,6 +12,7 @@ src-tauri/gen/android/.gradle/
 *.apk
 *.aab
 *.apks
+*.idsig
 *.keystore
 *.jks
 

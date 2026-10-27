@@ -83,6 +83,21 @@ export interface Reminder {
   notificationIds?: number[];
 }
 
+export interface DailyTask {
+  id: string;
+  date: string;
+  title: string;
+  completed: boolean;
+  createdAt: string;
+  completedAt?: string | null;
+}
+
+export interface DailyTaskDay {
+  date: string;
+  optedIn: boolean;
+  createdAt: string;
+}
+
 export interface AppSnapshot {
   playlists: Playlist[];
   videos: Video[];
@@ -91,6 +106,8 @@ export interface AppSnapshot {
   groups?: LearningGroup[];
   resources?: LearningResource[];
   resourceNotes?: ResourceNote[];
+  dailyTasks?: DailyTask[];
+  dailyTaskDays?: DailyTaskDay[];
 }
 
 export interface NewPlaylistInput {

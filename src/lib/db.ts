@@ -11,6 +11,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { normalizeGroupName, type GroupTarget } from "./groups";
 import type {
   AppSnapshot,
+  DailyTask,
+  DailyTaskDay,
   LearningGroup,
   LearningResource,
   NewResourceInput,
@@ -27,6 +29,7 @@ import type {
 
 const STORAGE_KEY = "affleck.local.v1";
 const DB_PATH = "sqlite:affleck.db";
+const DAILY_TASK_NOTIFICATION_IDS = [710001, 710002, 710003, 710004];
 
 let databasePromise: Promise<Database> | null = null;
 
@@ -121,6 +124,8 @@ const seedSnapshot: AppSnapshot = {
   groups: [],
   resources: [],
   resourceNotes: [],
+  dailyTasks: [],
+  dailyTaskDays: [],
 };
 
 function cloneSnapshot(snapshot: AppSnapshot): AppSnapshot {
@@ -145,6 +150,8 @@ function readLocalSnapshot(): Required<AppSnapshot> {
       groups: parsed.groups ?? [],
       resources: parsed.resources ?? [],
       resourceNotes: parsed.resourceNotes ?? [],
+      dailyTasks: parsed.dailyTasks ?? [],
+      dailyTaskDays: parsed.dailyTaskDays ?? [],
     };
   } catch {
     const initial = cloneSnapshot(seedSnapshot) as Required<AppSnapshot>;
@@ -270,13 +277,31 @@ async function ensureSchema(db: Database): Promise<void> {
       updated_at TEXT NOT NULL
     )`,
   );
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS daily_task_days (
+      date TEXT PRIMARY KEY,
+      opted_in INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL
+    )`,
+  );
+  await db.execute(
+    `CREATE TABLE IF NOT EXISTS daily_tasks (
+      id TEXT PRIMARY KEY,
+      date TEXT NOT NULL,
+      title TEXT NOT NULL,
+      completed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    )`,
+  );
+  await db.execute("CREATE INDEX IF NOT EXISTS daily_tasks_date_idx ON daily_tasks(date)");
 }
 
 // Earlier Android builds silently wrote localStorage when SQLite permissions failed.
 // Merge missing IDs once; retain the original snapshot as a recovery copy.
 async function recoverLegacyStorage(db: Database): Promise<void> {
   await db.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
-  const migrated = await db.select<Array<{ value: string }>>("SELECT value FROM app_meta WHERE key = 'legacy-storage-v2'");
+  const migrated = await db.select<Array<{ value: string }>>("SELECT value FROM app_meta WHERE key = 'legacy-storage-v3'");
   if (migrated.length) return;
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return;
@@ -287,6 +312,8 @@ async function recoverLegacyStorage(db: Database): Promise<void> {
   const groups = snapshot.groups ?? [];
   const resources = snapshot.resources ?? [];
   const resourceNotes = snapshot.resourceNotes ?? [];
+  const dailyTasks = snapshot.dailyTasks ?? [];
+  const dailyTaskDays = snapshot.dailyTaskDays ?? [];
   for (const group of groups) {
     await db.execute(
       "INSERT OR IGNORE INTO groups (id, name, created_at) VALUES ($1, $2, $3)",
@@ -331,14 +358,26 @@ async function recoverLegacyStorage(db: Database): Promise<void> {
       [note.id, note.resourceId, note.body, note.updatedAt],
     );
   }
-  await db.execute("INSERT INTO app_meta (key, value) VALUES ('legacy-storage-v2', 'done')");
+  for (const day of dailyTaskDays) {
+    await db.execute(
+      "INSERT OR IGNORE INTO daily_task_days (date, opted_in, created_at) VALUES ($1, $2, $3)",
+      [day.date, day.optedIn ? 1 : 0, day.createdAt],
+    );
+  }
+  for (const task of dailyTasks) {
+    await db.execute(
+      "INSERT OR IGNORE INTO daily_tasks (id, date, title, completed, created_at, completed_at) VALUES ($1, $2, $3, $4, $5, $6)",
+      [task.id, task.date, task.title, task.completed ? 1 : 0, task.createdAt, task.completedAt ?? null],
+    );
+  }
+  await db.execute("INSERT INTO app_meta (key, value) VALUES ('legacy-storage-v3', 'done')");
 }
 
 export async function loadSnapshot(): Promise<AppSnapshot> {
   const db = await getDatabase();
   if (!db) return readLocalSnapshot();
 
-  const [playlists, videos, notes, reminders, groups, resources, resourceNotes] = await Promise.all([
+  const [playlists, videos, notes, reminders, groups, resources, resourceNotes, dailyTasks, dailyTaskDays] = await Promise.all([
     db.select<Playlist[]>("SELECT id, title, channel, description, youtube_url as youtubeUrl, created_at as createdAt, group_id as groupId FROM playlists ORDER BY created_at DESC"),
     db.select<Video[]>("SELECT id, playlist_id as playlistId, position, title, youtube_url as youtubeUrl, duration, status FROM videos ORDER BY playlist_id, position"),
     db.select<Note[]>("SELECT id, video_id as videoId, body, updated_at as updatedAt FROM notes ORDER BY updated_at DESC"),
@@ -346,6 +385,8 @@ export async function loadSnapshot(): Promise<AppSnapshot> {
     db.select<LearningGroup[]>("SELECT id, name, created_at as createdAt FROM groups ORDER BY created_at DESC"),
     db.select<LearningResource[]>("SELECT id, kind, title, source_url as sourceUrl, file_name as fileName, file_url as fileUrl, author, description, group_id as groupId, status, progress, current_page as currentPage, total_pages as totalPages, literature_review as literatureReview, created_at as createdAt FROM resources ORDER BY created_at DESC"),
     db.select<ResourceNote[]>("SELECT id, resource_id as resourceId, body, updated_at as updatedAt FROM resource_notes ORDER BY updated_at DESC"),
+    db.select<Array<Omit<DailyTask, "completed"> & { completed: number }>>("SELECT id, date, title, completed, created_at as createdAt, completed_at as completedAt FROM daily_tasks ORDER BY date DESC, created_at ASC"),
+    db.select<Array<Omit<DailyTaskDay, "optedIn"> & { optedIn: number }>>("SELECT date, opted_in as optedIn, created_at as createdAt FROM daily_task_days ORDER BY date DESC"),
   ]);
 
   const reminderRows = reminders.map((reminder) => {
@@ -375,6 +416,8 @@ export async function loadSnapshot(): Promise<AppSnapshot> {
     notes,
     reminders: reminderRows,
   };
+  if (dailyTasks.length) result.dailyTasks = dailyTasks.map((task) => ({ ...task, completed: task.completed === 1 }));
+  if (dailyTaskDays.length) result.dailyTaskDays = dailyTaskDays.map((day) => ({ ...day, optedIn: day.optedIn === 1 }));
   if (groups.length || resources.length || resourceNotes.length) {
     result.groups = groups;
     result.resources = resources;
@@ -742,6 +785,125 @@ export async function deleteNote(videoId: string): Promise<void> {
     return;
   }
   await db.execute("DELETE FROM notes WHERE video_id = $1", [videoId]);
+}
+
+export function getLocalDateKey(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function ensureDailyTaskDay(snapshot: AppSnapshot, date: string, optedIn: boolean): DailyTaskDay {
+  const days = snapshot.dailyTaskDays ?? (snapshot.dailyTaskDays = []);
+  const existing = days.find((day) => day.date === date);
+  if (existing) {
+    existing.optedIn = optedIn;
+    return existing;
+  }
+  const day = { date, optedIn, createdAt: new Date().toISOString() };
+  days.push(day);
+  return day;
+}
+
+export async function setDailyTaskOptIn(date: string, optedIn: boolean): Promise<void> {
+  const db = await getDatabase();
+  if (!db) {
+    const snapshot = readLocalSnapshot();
+    ensureDailyTaskDay(snapshot, date, optedIn);
+    writeLocalSnapshot(snapshot);
+    return;
+  }
+  await db.execute(
+    `INSERT INTO daily_task_days (date, opted_in, created_at) VALUES ($1, $2, $3)
+     ON CONFLICT(date) DO UPDATE SET opted_in = excluded.opted_in`,
+    [date, optedIn ? 1 : 0, new Date().toISOString()],
+  );
+}
+
+export async function createDailyTask(title: string, date = getLocalDateKey()): Promise<string> {
+  const cleanTitle = title.trim();
+  if (!cleanTitle) throw new Error("Write a task before adding it to today's checklist.");
+  const id = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const db = await getDatabase();
+  if (!db) {
+    const snapshot = readLocalSnapshot();
+    ensureDailyTaskDay(snapshot, date, true);
+    snapshot.dailyTasks.unshift({ id, date, title: cleanTitle, completed: false, createdAt, completedAt: null });
+    writeLocalSnapshot(snapshot);
+    return id;
+  }
+  await db.execute(
+    `INSERT INTO daily_task_days (date, opted_in, created_at) VALUES ($1, 1, $2)
+     ON CONFLICT(date) DO UPDATE SET opted_in = 1`,
+    [date, createdAt],
+  );
+  await db.execute(
+    "INSERT INTO daily_tasks (id, date, title, completed, created_at, completed_at) VALUES ($1, $2, $3, 0, $4, NULL)",
+    [id, date, cleanTitle, createdAt],
+  );
+  return id;
+}
+
+export async function toggleDailyTask(taskId: string, completed: boolean): Promise<void> {
+  const completedAt = completed ? new Date().toISOString() : null;
+  const db = await getDatabase();
+  if (!db) {
+    const snapshot = readLocalSnapshot();
+    const task = snapshot.dailyTasks.find((item) => item.id === taskId);
+    if (!task) return;
+    task.completed = completed;
+    task.completedAt = completedAt;
+    writeLocalSnapshot(snapshot);
+    return;
+  }
+  await db.execute("UPDATE daily_tasks SET completed = $1, completed_at = $2 WHERE id = $3", [completed ? 1 : 0, completedAt, taskId]);
+}
+
+export async function deleteDailyTask(taskId: string): Promise<void> {
+  const db = await getDatabase();
+  if (!db) {
+    const snapshot = readLocalSnapshot();
+    snapshot.dailyTasks = snapshot.dailyTasks.filter((task) => task.id !== taskId);
+    writeLocalSnapshot(snapshot);
+    return;
+  }
+  await db.execute("DELETE FROM daily_tasks WHERE id = $1", [taskId]);
+}
+
+export async function syncDailyTaskNotifications(tasks: DailyTask[]): Promise<string | null> {
+  if (!isTauri() || !/android/i.test(navigator.userAgent)) return null;
+  try {
+    await cancel(DAILY_TASK_NOTIFICATION_IDS);
+    const today = getLocalDateKey();
+    if (!tasks.some((task) => task.date === today && !task.completed)) return null;
+    let permissionGranted = await isPermissionGranted();
+    if (!permissionGranted) permissionGranted = (await requestPermission()) === "granted";
+    if (!permissionGranted) return "Checklist saved, but unfinished-task notifications are blocked. Enable notifications in Android Settings.";
+    await createChannel({
+      id: "affleck-daily-tasks",
+      name: "Affleck daily tasks",
+      description: "A gentle nudge for unfinished goals on your daily checklist.",
+    });
+    const now = new Date();
+    const slots = [0, 6, 12, 18]
+      .map((hour) => new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 0, 0))
+      .filter((date) => date.getTime() > now.getTime());
+    for (const [index, date] of slots.entries()) {
+      await invoke("plugin:notification|notify", { options: {
+        id: DAILY_TASK_NOTIFICATION_IDS[index],
+        channelId: "affleck-daily-tasks",
+        title: "A gentle check-in",
+        body: "You have an unfinished goal for today. Open Affleck when you have a moment.",
+        schedule: Schedule.at(date, false, true),
+        extra: { type: "daily-task" },
+      } });
+    }
+    return null;
+  } catch (error) {
+    return `Checklist saved, but Android could not schedule the six-hour reminders. ${String(error)}`;
+  }
 }
 
 export async function saveReminder(reminder: Reminder): Promise<string | null> {

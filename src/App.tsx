@@ -5,6 +5,8 @@ import {
   createVideo,
   createPlaylist,
   createResource,
+  createDailyTask,
+  deleteDailyTask,
   deleteGroup,
   deleteNote,
   deletePlaylist,
@@ -13,10 +15,14 @@ import {
   deleteVideo,
   deleteResourceNote,
   loadSnapshot,
+  getLocalDateKey,
   openExternalUrl,
   saveNote,
   saveReminder,
   saveResourceNote,
+  setDailyTaskOptIn,
+  syncDailyTaskNotifications,
+  toggleDailyTask,
   updateResourceDetails,
   updateResourceProgress,
   updateResourceFile,
@@ -28,6 +34,7 @@ import { VideoCard } from "./components/VideoCard";
 import { ResourceCard } from "./components/ResourceCard";
 import { ResourceNoteEditor } from "./components/ResourceNoteEditor";
 import { HabitsView } from "./components/HabitsView";
+import { DailyTasksView } from "./components/DailyTasksView";
 import { GroupPicker } from "./components/GroupPicker";
 import { useLongPress } from "./components/useLongPress";
 import type { GroupTarget } from "./lib/groups";
@@ -46,12 +53,14 @@ import type {
   VideoStatus,
   ResourceStatus,
   NewVideoInput,
+  DailyTask,
 } from "./types";
 
-type Screen = "today" | "library" | "habits" | "notes";
+type Screen = "today" | "tasks" | "library" | "habits" | "notes";
 
 const navItems: Array<{ id: Screen; label: string; icon: string }> = [
   { id: "today", label: "Today", icon: "◒" },
+  { id: "tasks", label: "Tasks", icon: "✓" },
   { id: "library", label: "Library", icon: "▤" },
   { id: "habits", label: "Habits", icon: "◷" },
   { id: "notes", label: "Notes", icon: "✎" },
@@ -129,6 +138,7 @@ function App() {
         if (active) {
           setSnapshot(next);
           setLoadError("");
+          void syncDailyTaskNotifications(next.dailyTasks ?? []);
         }
       } catch (error) {
         if (active)
@@ -364,6 +374,43 @@ function App() {
     await refresh("Reminder removed.");
   }
 
+  async function refreshDailyTasks(message?: string): Promise<void> {
+    const next = await loadSnapshot();
+    setSnapshot(next);
+    const warning = await syncDailyTaskNotifications(next.dailyTasks ?? []);
+    if (message || warning) {
+      setNotice(warning ?? message ?? "");
+      window.setTimeout(() => setNotice(""), 4200);
+    }
+  }
+
+  async function handleDailyTaskOptIn(): Promise<void> {
+    await setDailyTaskOptIn(getLocalDateKey(), true);
+    await refreshDailyTasks("Today’s checklist is ready.");
+    setActiveScreen("tasks");
+  }
+
+  async function handleDailyTaskSkip(): Promise<void> {
+    await setDailyTaskOptIn(getLocalDateKey(), false);
+    await refreshDailyTasks("No checklist for today. You can change your mind from Tasks.");
+  }
+
+  async function handleAddDailyTask(title: string): Promise<void> {
+    await createDailyTask(title);
+    await refreshDailyTasks("Task added to today’s checklist.");
+  }
+
+  async function handleToggleDailyTask(task: DailyTask, completed: boolean): Promise<void> {
+    await toggleDailyTask(task.id, completed);
+    await refreshDailyTasks(completed ? "Task complete." : "Task moved back to today’s list.");
+  }
+
+  async function handleDeleteDailyTask(task: DailyTask): Promise<void> {
+    if (!window.confirm(`Remove “${task.title}” from today’s checklist?`)) return;
+    await deleteDailyTask(task.id);
+    await refreshDailyTasks("Task removed.");
+  }
+
   if (loadError && !snapshot)
     return (
       <main className="main-content">
@@ -385,6 +432,9 @@ function App() {
   const groups = snapshot.groups ?? [];
   const resources = snapshot.resources ?? [];
   const resourceNotes = snapshot.resourceNotes ?? [];
+  const dailyTasks = snapshot.dailyTasks ?? [];
+  const dailyTaskDays = snapshot.dailyTaskDays ?? [];
+  const today = getLocalDateKey();
 
   const currentView = selectedPlaylist ? (
     <PlaylistDetail
@@ -436,13 +486,31 @@ function App() {
       snapshot={snapshot}
       onOpenPlaylist={setSelectedPlaylistId}
       resources={resources}
+      dailyTasks={dailyTasks}
+      dailyTaskDays={dailyTaskDays}
+      today={today}
       onOpenVideo={(video) => void openExternalUrl(video.youtubeUrl)}
+      onOpenResource={setSelectedResourceId}
       onStatus={(video, status) =>
         void handleStatus(video, status).catch((error) =>
           setNotice(String(error)),
         )
       }
       onOpenHabits={() => setActiveScreen("habits")}
+      onOpenTasks={() => setActiveScreen("tasks")}
+      onStartTasks={handleDailyTaskOptIn}
+      onSkipTasks={handleDailyTaskSkip}
+      onToggleTask={handleToggleDailyTask}
+    />
+  ) : activeScreen === "tasks" ? (
+    <DailyTasksView
+      tasks={dailyTasks}
+      days={dailyTaskDays}
+      today={today}
+      onOptIn={handleDailyTaskOptIn}
+      onAdd={handleAddDailyTask}
+      onToggle={handleToggleDailyTask}
+      onDelete={handleDeleteDailyTask}
     />
   ) : activeScreen === "library" ? (
     <LibraryView
@@ -499,7 +567,10 @@ function App() {
           }}
         >
           <img className="brand-logo" src="/affleck-logo.svg" alt="" />
-          <span>Affleck</span>
+          <span className="brand-copy">
+            <span className="brand-title">Affleck</span>
+            <small className="brand-motto">Gotham demands commitment</small>
+          </span>
         </button>
         <div className="topbar-date">{formatDate()}</div>
         <button className="add-button" onClick={() => setIsAddOpen(true)}>
@@ -597,22 +668,39 @@ function TodayView({
   summaries,
   snapshot,
   resources,
+  dailyTasks,
+  dailyTaskDays,
+  today,
   onOpenPlaylist,
   onOpenVideo,
+  onOpenResource,
   onStatus,
   onOpenHabits,
+  onOpenTasks,
+  onStartTasks,
+  onSkipTasks,
+  onToggleTask,
 }: {
   summaries: PlaylistSummary[];
   snapshot: AppSnapshot;
   resources: LearningResource[];
+  dailyTasks: DailyTask[];
+  dailyTaskDays: NonNullable<AppSnapshot["dailyTaskDays"]>;
+  today: string;
   onOpenPlaylist: (id: string) => void;
   onOpenVideo: (video: Video) => void;
+  onOpenResource: (id: string) => void;
   onStatus: (video: Video, status: VideoStatus) => void;
   onOpenHabits: () => void;
+  onOpenTasks: () => void;
+  onStartTasks: () => Promise<void>;
+  onSkipTasks: () => Promise<void>;
+  onToggleTask: (task: DailyTask, completed: boolean) => Promise<void>;
 }) {
   const nextVideo =
     summaries.find((summary) => summary.nextVideo)?.nextVideo ?? null;
   const nextPlaylist = summaries.find((summary) => summary.nextVideo) ?? null;
+  const nextResource = resources.find((resource) => resource.status !== "complete") ?? null;
   const completeCount = snapshot.videos.filter(
     (video) => video.status === "complete",
   ).length;
@@ -623,6 +711,9 @@ function TodayView({
     (resource) => resource.status === "complete",
   ).length;
   const reminder = snapshot.reminders.find((item) => item.enabled);
+  const todayDay = dailyTaskDays.find((day) => day.date === today);
+  const todayTasks = dailyTasks.filter((task) => task.date === today);
+  const firstUnfinishedTask = todayTasks.find((task) => !task.completed);
 
   return (
     <section className="page-stack">
@@ -633,6 +724,26 @@ function TodayView({
           A quiet place to return to the things you said you wanted to learn.
         </p>
       </div>
+
+      {!todayDay ? (
+        <section className="daily-prompt-card">
+          <div><p className="eyebrow">A small intention</p><h2>What do you like to achieve today?</h2><p className="muted">Add a few tasks or goals to a checklist, or leave today open.</p></div>
+          <div className="daily-prompt-actions"><button className="primary-button" onClick={() => void onStartTasks()}>Plan my day</button><button className="outline-button" onClick={() => void onSkipTasks()}>Not today</button></div>
+        </section>
+      ) : todayDay.optedIn && firstUnfinishedTask ? (
+        <section className="daily-reminder-card">
+          <div><p className="eyebrow">Today’s next goal</p><h2>{firstUnfinishedTask.title}</h2><p className="muted">Your first unfinished task is here when you are ready.</p></div>
+          <div className="daily-reminder-actions"><label className="task-check"><input type="checkbox" aria-label={`Complete ${firstUnfinishedTask.title}`} checked={false} onChange={() => void onToggleTask(firstUnfinishedTask, true)} /><span>Mark complete</span></label><button className="outline-button" onClick={onOpenTasks}>Open checklist</button></div>
+        </section>
+      ) : todayDay.optedIn ? (
+        <section className="daily-reminder-card complete">
+          <div><p className="eyebrow">Today’s checklist</p><h2>Everything is complete.</h2><p className="muted">A good day can be quiet from here.</p></div><button className="outline-button" onClick={onOpenTasks}>Review tasks</button>
+        </section>
+      ) : (
+        <section className="daily-reminder-card">
+          <div><p className="eyebrow">Today</p><h2>No checklist planned.</h2><p className="muted">You can still add a goal whenever you want.</p></div><button className="outline-button" onClick={onOpenTasks}>Open Tasks</button>
+        </section>
+      )}
 
       <div className="today-grid">
         <div className="feature-card paper-texture">
@@ -653,6 +764,18 @@ function TodayView({
                 onClick={() => onOpenVideo(nextVideo)}
               >
                 Open in YouTube <span>↗</span>
+              </button>
+            </>
+          ) : nextResource ? (
+            <>
+              <p className="feature-kicker">{nextResource.kind === "pdf" ? "PDF" : nextResource.kind === "paper" ? "Research paper" : "Blog"}</p>
+              <h2>{nextResource.title}</h2>
+              <div className="feature-meta">
+                <span>{nextResource.progress}% complete</span>
+                <span>{nextResource.status === "review" ? "Review" : "Ready to continue"}</span>
+              </div>
+              <button className="primary-button" onClick={() => onOpenResource(nextResource.id)}>
+                Open resource <span>→</span>
               </button>
             </>
           ) : (
