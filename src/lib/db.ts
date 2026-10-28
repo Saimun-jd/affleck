@@ -9,6 +9,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { normalizeGroupName, type GroupTarget } from "./groups";
+import { requireExternalUrl } from "./urls";
 import type {
   AppSnapshot,
   DailyTask,
@@ -462,6 +463,7 @@ export async function createPlaylist(input: NewPlaylistInput): Promise<void> {
 function isYoutubeVideoUrl(value: string): boolean {
   try {
     const url = new URL(value.trim());
+    if (url.protocol !== "https:") return false;
     const host = url.hostname.replace(/^www\./, "").toLowerCase();
     return (host === "youtube.com" || host === "m.youtube.com" || host === "youtu.be") &&
       (host === "youtu.be" ? url.pathname.length > 1 : url.searchParams.has("v"));
@@ -622,6 +624,9 @@ export async function assignGroup(target: GroupTarget, selection: { groupId: str
 
 export async function updateResourceFile(resourceId: string, fileName: string, fileUrl: string): Promise<void> {
   if (!fileName || !fileUrl) throw new Error("Choose a PDF before attaching it.");
+  if (!fileUrl.startsWith("content://") && !fileUrl.startsWith("blob:")) {
+    throw new Error("The attached PDF reference is not supported.");
+  }
   const db = await getDatabase();
   if (!db) {
     const snapshot = readLocalSnapshot();
@@ -640,6 +645,11 @@ export async function createResource(input: NewResourceInput): Promise<string> {
   if (!title) throw new Error("Add a title before saving this item.");
   if (input.kind === "blog" && !input.sourceUrl?.trim()) throw new Error("Add the blog URL before saving it.");
   if (input.kind === "pdf" && !input.fileName?.trim()) throw new Error("Choose a PDF from your device before saving it.");
+  if (input.sourceUrl?.trim()) requireExternalUrl(input.sourceUrl, "Use a valid HTTP or HTTPS source URL.");
+  if (input.kind === "pdf" && !input.fileUrl?.trim()) throw new Error("Choose a PDF from your device before saving it.");
+  if (input.fileUrl?.trim() && !input.fileUrl.startsWith("content://") && !input.fileUrl.startsWith("blob:")) {
+    throw new Error("The attached PDF reference is not supported.");
+  }
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const resource: LearningResource = {
@@ -1019,9 +1029,11 @@ export async function deleteReminder(target: { playlistId: string | null; resour
 }
 
 export async function openExternalUrl(url: string): Promise<void> {
+  const safeUrl = requireExternalUrl(url);
   try {
-    await openUrl(url);
+    await openUrl(safeUrl);
   } catch {
-    window.open(url, "_blank", "noopener,noreferrer");
+    const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
+    if (!opened) throw new Error("Allow pop-ups for this app, then try again.");
   }
 }

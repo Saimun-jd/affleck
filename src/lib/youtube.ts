@@ -10,6 +10,12 @@ const INVIDIOUS_INSTANCES = [
   "https://invidious.f5.si",
 ];
 
+const MAX_PLAYLIST_PAGES = 100;
+const MAX_PLAYLIST_VIDEOS = 5000;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_TITLE_LENGTH = 500;
+const MAX_DESCRIPTION_LENGTH = 20_000;
+
 interface InvidiousPlaylistResponse {
   title?: string;
   author?: string;
@@ -32,12 +38,53 @@ export interface ImportProgress {
 function parsePlaylistId(input: string): string {
   try {
     const url = new URL(input.trim());
+    if (url.protocol !== "https:") throw new Error();
+    const host = url.hostname.replace(/^www\./, "").toLowerCase();
+    if (host !== "youtube.com" && host !== "m.youtube.com") throw new Error();
     const playlistId = url.searchParams.get("list");
     if (playlistId) return playlistId;
   } catch {
     // Fall through to the clearer validation error below.
   }
   throw new Error("Paste a valid YouTube playlist URL containing a list parameter.");
+}
+
+async function readBoundedBody(response: Response): Promise<string> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && Number(contentLength) > MAX_RESPONSE_BYTES) {
+    throw new Error("Playlist service returned an unexpectedly large response.");
+  }
+  if (!response.body) {
+    const body = await response.text();
+    if (body.length > MAX_RESPONSE_BYTES) throw new Error("Playlist service returned an unexpectedly large response.");
+    return body;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error("Playlist service returned an unexpectedly large response.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 async function requestJson<T>(url: string): Promise<T> {
@@ -48,7 +95,13 @@ async function requestJson<T>(url: string): Promise<T> {
     response = await window.fetch(url);
   }
 
-  const payload = await response.json() as T & { error?: string; message?: string };
+  const body = await readBoundedBody(response);
+  let payload: T & { error?: string; message?: string };
+  try {
+    payload = JSON.parse(body) as T & { error?: string; message?: string };
+  } catch {
+    throw new Error("Playlist service returned invalid JSON.");
+  }
   if (!response.ok) {
     throw new Error(payload.error ?? payload.message ?? `Playlist service returned HTTP ${response.status}.`);
   }
@@ -94,7 +147,7 @@ export async function importYoutubePlaylist(
 
   onProgress?.({ phase: "playlist", completed: 0, total: 0 });
 
-  while (page <= 1000) {
+  while (page <= MAX_PLAYLIST_PAGES) {
     const response = await requestPlaylistPage(playlistId, page);
     playlist ??= response;
     const pageVideos = response.videos ?? [];
@@ -108,10 +161,13 @@ export async function importYoutubePlaylist(
       seenItems.add(itemKey);
       importedVideos.push({
         index,
-        title: video.title?.trim() || `Video ${importedVideos.length + 1}`,
+        title: video.title?.trim().slice(0, MAX_TITLE_LENGTH) || `Video ${importedVideos.length + 1}`,
         youtubeUrl: `https://www.youtube.com/watch?v=${video.videoId}&list=${playlistId}`,
         duration: formatDuration(video.lengthSeconds),
       });
+      if (importedVideos.length >= MAX_PLAYLIST_VIDEOS) {
+        throw new Error(`This playlist is larger than Affleck can safely import (${MAX_PLAYLIST_VIDEOS.toLocaleString()} videos).`);
+      }
     }
 
     onProgress?.({
@@ -127,12 +183,15 @@ export async function importYoutubePlaylist(
   if (!playlist || importedVideos.length === 0) {
     throw new Error("That playlist could not be found, is not public, or contains no videos.");
   }
+  if (page > MAX_PLAYLIST_PAGES && playlist.videoCount && importedVideos.length < playlist.videoCount) {
+    throw new Error(`This playlist exceeds Affleck's safe import limit of ${MAX_PLAYLIST_PAGES} pages.`);
+  }
 
   importedVideos.sort((left, right) => left.index - right.index);
   return {
-    title: playlist.title?.trim() || "YouTube playlist",
-    channel: playlist.author?.trim() || "YouTube",
-    description: playlist.description?.trim() || "",
+    title: playlist.title?.trim().slice(0, MAX_TITLE_LENGTH) || "YouTube playlist",
+    channel: playlist.author?.trim().slice(0, MAX_TITLE_LENGTH) || "YouTube",
+    description: playlist.description?.trim().slice(0, MAX_DESCRIPTION_LENGTH) || "",
     youtubeUrl: `https://www.youtube.com/playlist?list=${playlistId}`,
     videos: importedVideos.map(({ title, youtubeUrl, duration }) => ({ title, youtubeUrl, duration })),
   };

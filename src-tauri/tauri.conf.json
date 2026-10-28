@@ -18,7 +18,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' asset: https://asset.localhost data: blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 https://inv.nadeko.net https://invidious.nerdvpn.de https://yt.chocolatemoo53.com https://invidious.tiekoetter.com https://invidious.f5.si; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+      "freezePrototype": true
     }
   },
   "plugins": {

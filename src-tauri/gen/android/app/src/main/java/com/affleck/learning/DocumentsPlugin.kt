@@ -48,8 +48,6 @@ class DocumentsPlugin(private val activity: Activity) : Plugin(activity) {
       try {
         if (uri.scheme != "content") throw IllegalArgumentException("Unsupported document reference")
         val resolver = activity.contentResolver
-        // ACTION_OPEN_DOCUMENT grants access across process/device restarts.
-        resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         var name = "Document.pdf"
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
           if (cursor.moveToFirst()) name = cursor.getString(0) ?: name
@@ -59,6 +57,8 @@ class DocumentsPlugin(private val activity: Activity) : Plugin(activity) {
           invoke.reject("Choose a PDF document.")
           return@execute
         }
+        // Persist only validated PDF references across process/device restarts.
+        resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         invoke.resolve(JSObject().put("name", name).put("uri", uri.toString()))
       } catch (_: Exception) {
         invoke.reject("Could not retain access to this PDF. Select it from your device's Files app again; no copy will be stored.")

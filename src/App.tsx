@@ -67,10 +67,14 @@ const navItems: Array<{ id: Screen; label: string; icon: string }> = [
 ];
 
 function getSummaries(snapshot: AppSnapshot): PlaylistSummary[] {
+  const videosByPlaylist = new Map<string, Video[]>();
+  for (const video of snapshot.videos) {
+    const videos = videosByPlaylist.get(video.playlistId) ?? [];
+    videos.push(video);
+    videosByPlaylist.set(video.playlistId, videos);
+  }
   return snapshot.playlists.map((playlist) => {
-    const videos = snapshot.videos.filter(
-      (video) => video.playlistId === playlist.id,
-    );
+    const videos = videosByPlaylist.get(playlist.id) ?? [];
     const completeCount = videos.filter(
       (video) => video.status === "complete",
     ).length;
